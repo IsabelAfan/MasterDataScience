@@ -1,0 +1,181 @@
+---
+title: "Practica1_NBA"
+author: "Isabel Afán de Ribera"
+date: "28/10/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Objetivo
+
+Conocer la relacion que hay entre los datos de los jugadores y sus salarios. Para ello analizaremos distintos modelos de regresion lineal hasta encontrar las variables independientes que mas expliquen la variable dependiente salario
+
+# Carga de librerias necesarias
+
+```{r Librerias}
+library(readr) # para importar los datos
+library(tidyverse) 
+library(MASS)  # seleccion de modelo
+library(leaps) # seleccion de modelo
+library(car)   # normalidad, multicolinealidad, outliers
+library(gvlma)  # validacion global
+```
+
+# Carga de la base de datos
+
+```{r Base de datos}
+datos_nba <- read_delim("C:\\Users\\iafan\\Desktop\\MDSF_CUNEF\\Prediccion\\Practica1_NBA\\nba.csv", 
+                  ";", escape_double = FALSE, trim_ws = TRUE)
+View(datos_nba)
+```
+
+# Limpieza de datos: antes de trabajar con los datos eliminamos duplicados y valores NA
+
+```{r Limpiar datos }
+datos_nba <- unique(datos_nba)
+datos_nba <- na.omit(datos_nba)
+```
+
+# Renombrar variables para facilitar el trabajo
+
+```{r Renombrar variables}
+datos_nba <- rename(datos_nba, Team=Tm, Partidos=G, Minutos=MP, Eficiencia=PER, Exito="TS%", Triple="3PAr", Tiros_Libres=FTr, Rebote_Ataq="ORB%", Rebote_Def="DRB%", Rebote_Total="TRB%", Asistencia="AST%", Robo="STL%", Bloqueo="BLK%", Perdidas="TOV%", Participacion="USG%", Buen_Ataq=OWS, Buena_Def=DWS, Buen_Total=WS, Buen_Total_48="WS/48", Calidad_Ataq=OBPM, Calidad_Def=DBPM, Calidad_Total=BPM, Contribucion=VORP)
+```
+
+# Summary para conocer mejor las variables a traves de estadisticos descriptivos
+
+```{r Resumen de los datos}
+summary(datos_nba)
+```
+
+# Seleccion de modelo mediante el metodo Backward Stepwise
+
+
+```{r Modelo 1}
+# Backward Stepwise. Genero un primer modelo lineal multiple al que llamo modelo1 donde incluyo todas las variables como precitores del salario excepto las variables Player, NBA_Country y Team al ser estas variables categorica. Posteriormente vamos eliminando los predictores no significativos.
+modelo1 <- lm(Salary~ . - (Player + NBA_Country + Team), data=datos_nba)
+summary(modelo1)
+# este modelo1 con todas las variables introducidas excepto las categoricas tiene R cuadrado multiple de 0.5479, es decir, el modelo representa el 54,79% de la variacion del salario y muchos de los coeficientes parciales de regresion no son significativos al no ser el Pr de la ultima columna significativamente distinto de cero
+```
+
+```{r Seleccion de predictores}
+stepAIC(modelo1, direction="backward")
+# y obtengo el mejor modelo resultante del proceso de seleccion, que en este caso incluye las variables NBA_DraftNumber, Age, Partidos, Minutos,  Eficiencia, Triple, Rebote_Ataq, Rebote_Total, Participacion, Buen_Total, Calidad_Ataq
+```
+
+```{r}
+regfit.bwd = regsubsets(Salary~.-(Player + NBA_Country + Team),datos_nba,method ="backward")
+summary (regfit.bwd)
+# variables mas significativas para el modelo NBA_DraftNumber, Age, Partidos, Minutos, Rebote_Ataq, Rebote_Total, Participaciones, Buen_total
+```
+
+```{r Modelo 2}
+# Modelo resultante de la seleccion de variables por metodo de Backward
+modelo2 <- lm(Salary ~ NBA_DraftNumber + Age + Partidos + Minutos + Rebote_Ataq + Rebote_Total + Participacion + Buen_Total, datos_nba)
+summary(modelo2)
+```
+
+```{r Multicolinealidad modelo2}
+# Paso a analizar la multicolinealidad de las variables de este modelo2 pues en los modelos lineales multiples los predictores deben ser independientes, no debe de haber colinialidad entre ellos, habra que descartar variables interrelacionadas
+vif(modelo2) 
+sqrt(vif(modelo2)) > 2
+# VIF a partir de 5 causa de multicolinealidad, en este caso Partidos y Minutos, excluyo la variable Minutos pues parece el predictor mas problematico por su nivel de VIF 8.6
+```
+
+```{r Modelo 3}
+# Genero nuevo modelo eliminando Minutos
+modelo3 <- lm(Salary ~ NBA_DraftNumber + Age + Partidos + Rebote_Ataq + Rebote_Total + Participacion + Buen_Total, datos_nba)
+summary(modelo3)
+```
+
+```{r Multicolinealidad modelo3}
+# vuelvo a comprobar multicolinealidad para ver si la hemos resuelto
+vif(modelo3)
+sqrt(vif(modelo3)) >2
+# ya no hay colinealidad entre los predictores, todos los VIF por debajo de 5
+```
+
+```{r Comparamos modelos para seleccion}
+BIC(modelo1, modelo3)
+# mediante Schwarz’s BIC se selecciona el modelo con menor BIC, en este caso modelo3 con BIC de  16371.89
+```
+
+# Analisis de residuos del modelo elegido, modelo3
+
+```{r Estdudio de la Normalidad}
+# Q-Q plot
+qqPlot(modelo3, labels=row.names(datos_nba), id.method="identify",
+       simulate=TRUE, main="Q-Q Plot")
+
+# Test de normalidad de Shapiro-Wilk
+shapiro.test(modelo3$residuals)
+# p value menor de 0.05 se rechaza la Ho, los residuos no se distribuyen con normalidad
+```
+
+```{r Histograma + densidad + normal + rug}
+residplot <- function(fit, nbreaks=10) {
+  z <- rstudent(fit)
+  hist(z, breaks=nbreaks, freq=FALSE,
+       xlab="Studentized Residual",
+       main="Distribution of Errors")
+  rug(jitter(z), col="brown")
+  curve(dnorm(x, mean=mean(z), sd=sd(z)),
+        add=TRUE, col="blue", lwd=2)
+  lines(density(z)$x, density(z)$y,
+        col="red", lwd=2, lty=2)
+  legend("topright",
+         legend = c( "Normal Curve", "Kernel Density Curve"),
+         lty=1:2, col=c("blue","red"), cex=.7)
+}
+
+residplot(modelo3)
+# los errores si se distribuyen de forma normal con media cero
+```
+
+```{r Estudio de la linealidad}
+crPlots(modelo3)
+# Se grafican los valores ajustados con respecto a los predictores, para todas las variables. se obtiene una recta sobre la que se representan los puntos. La variable dependiente se relaciona linealmente con las variables independientes
+```
+
+```{r Estudio de la Homocedasticidad}
+ncvTest(modelo3)
+spreadLevelPlot(modelo3)
+# pvalor menor de 0.05, se rechaza la Ho la varianza de los residuos no es constante en todas las observaciones realizas. No hay homocedasticidad
+```
+
+```{r Validacion global}
+gvmodel <- gvlma(modelo3) 
+summary(gvmodel)
+# corrobora que el modelo es heterocedastico
+```
+
+```{r Valores atípicos}
+outlierTest(modelo3)
+# la observacion 112 y 326 se han identificado como atipicos, Bonferroni p menor a 0.05
+```
+
+```{r Valores extremos}
+hat.plot <- function(fit) {
+  p <- length(coefficients(fit))
+  n <- length(fitted(fit))
+  plot(hatvalues(fit), main="Index Plot of Hat Values")
+  abline(h=c(2,3)*p/n, col="red", lty=2)
+  identify(1:n, hatvalues(fit), names(hatvalues(fit)))
+}
+hat.plot(modelo3)
+```
+
+```{r Valores influyentes Cooks distance}
+
+cutoff <- 4/(nrow(datos_nba)-length(modelo3$coefficients)-2)
+plot(modelo3, which=4, cook.levels=cutoff)
+abline(h=cutoff, lty=2, col="red")
+# las observaciones 152, 227 y 326 tienen un impacto desproporcionado en los valores de los parametros del modelo
+```
+
+# Conclusion
+
+Las variables o los datos de los jugadores de la NBA que tienen una mayor relacion o mas influyen en la variable dependiente salario son: NBA_DraftNumber, Age, Partidos, Rebote_Ataq, Rebote_Total, Participacion, Buen_Total.
