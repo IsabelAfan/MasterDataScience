@@ -1,0 +1,264 @@
+---
+title: "Ventas Apple. Modelos ETS y ARIMA"
+author: "Isabel Afán de Ribera"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE, fig.width = 6, fig.height = 4, fig.align = "center", dpi = 500)
+```
+
+## Objetivo
+
+El objetivo del presente trabajo es predecir las ventas de Apple mediante los datos trimestrales desde el 2T de 2008 hasta el 3T del 2017 obtenidos de Bloomerg. Para ello se aplicaran los modelos ETS y ARIMA relativos a series temporales y se decidirá cuál de ellos es el más adecuado para predecir las ventas.
+
+## Descripción del dataset
+
+El dataset relativo a las ventas de Apple consiste en 38 observaciones y 2 variables.
+
+*`Trimestres`
+*`Ingresos`
+
+
+```{r Libraries and functions, message=FALSE, warning=FALSE}
+library(janitor) # Clean names
+library(magrittr) # Pipe operators
+library(skimr) # Beautiful Summarize
+library(forecast) # series temporales
+library(xts) # manejo datos de series temporales
+library(ggplot2) # visualizacion
+```
+
+```{r Read Data}
+raw_data <-  read.csv("IngresosApple.csv", sep = ";")
+View(raw_data)
+```
+
+```{r Clean Names}
+raw_data %<>% clean_names()
+colnames(raw_data)
+```
+
+```{r Summarise Data, include=FALSE}
+skim(raw_data)
+# no hay missing values
+```
+
+## Tratamiento de datos
+
+```{r Data selection}
+# datos de ventas
+raw_ventas <- raw_data$ingresos
+# convertimos los trimestres a formato fecha
+raw_date <- seq(as.Date("2008/04/01"), as.Date("2017/07/01"), by = "quarter")
+```
+
+```{r XTS}
+# creamos un objeto XTS para pasar a serie temporal continua con libreria xts
+x_Ventas <- xts(raw_ventas,order.by=raw_date)
+```
+
+```{r quarterly}
+# pasamos las fechas a trimestres 
+x_Ventas <- to.quarterly(x_Ventas)
+```
+
+```{r zoo}
+# pasamos las ventas tambien a formato zoo con libreria forecast
+z_Ventas <- as.zoo(x_Ventas$x_Ventas.Close)
+```
+
+```{r change names}
+# cambio del nombre de la columna a Ventas
+names(z_Ventas) = "Ventas"
+```
+
+## Análisis de la serie temporal
+
+En primer lugar, graficamos las ventas de Apple para ver la tendencia seguida y su estacionalidad.
+
+```{r plot serie}
+# graficamos las ventas de Apple por trimestres
+autoplot(z_Ventas) + ylab("Ventas") + ggtitle("Ventas Trimestrales Apple") + xlab("Trimestres")
+```
+Como puede observarse la serie es no estacionaria pues la media y la variabilidad cambian a lo largo del tiempo. Para convertirla en estacionaria vamos a aplicar los modelos ARIMA y ETS.
+
+
+```{r plot, include=FALSE}
+# pasar de xts a dataframe
+df_apple <- data.frame(value = as.vector(z_Ventas),
+                     time = time(z_Ventas))
+ggplot(df_apple) + 
+geom_point(aes(x=time,y=value)) + 
+geom_line(aes(x=time,y=value)) + ylab("Ventas") + 
+ggtitle("Ventas Trimestrales Apple") + xlab("Trimestres")
+```
+
+
+## Transformación de la varianza
+
+Para obtener una serie estacionaria en varianza se aplica normalmente la transformación logarítmica con parámetro lambda cero.
+
+```{r log transformation, include=FALSE}
+# transformacion de la serie para que sea estacionaria en varianza
+# transformacion logaritmica
+zl_Ventas <- log(z_Ventas)
+df_apple_l <- data.frame(value = as.vector(zl_Ventas),
+                     time = time(zl_Ventas))
+ggplot(df_apple_l) + 
+geom_point(aes(x=time,y=value)) + 
+  geom_line(aes(x=time,y=value))+ylab("Ventas") + ggtitle("Ventas Trimestrales LOG Apple") + xlab("Trimestres")
+```
+
+## Transformación de la media
+
+La transformación de la media consiste en realizar diferencias hasta obtener una serie ya estacionaria.
+
+```{r, include=FALSE}
+
+# diferencia
+zl_Ventas <- log(z_Ventas)
+ggtsdisplay(zl_Ventas)
+
+```
+
+Aquí hay retardos donde ACF (autocorrelación simple) y PACF (autocorrelación parcial) son distintos de cero, saliendose de las líneas discontinuas azules. Serie no estacionaria.
+
+
+```{r, include=FALSE}
+# diferencia de primer orden
+ggtsdisplay(diff(zl_Ventas))
+```
+
+Serie no estacionaria, sigue habiendo retardos con ACF y PACF distinto de cero.
+
+```{r, include=FALSE}
+# diferencia de orden 4
+ggtsdisplay(diff(zl_Ventas,4))
+```
+En la diferencia de orden 4 sigue habiendo retardos con ACF y PACF distinto de cero. Serie no estacionaria.
+
+
+```{r, include=FALSE}
+ggtsdisplay(diff(diff(zl_Ventas,4),1))
+```
+
+Esta vez si se ha convertido la serie temporal en estacionaria, todos los retardos se mantienen dentro de los límites fijados por la línea discontinua azul, ACF y PACF igual a cero.
+
+Ahora vamos a pasar a obtener el mejor modelo de forma automática con ARIMA.
+
+## Modelo ARIMA
+
+```{r}
+# excluimos los tres ultimos trimestres sorrespondientes al año 2017
+cOmit <- 3
+
+# seleccionamos las observaciones
+nObs <- length(z_Ventas)
+
+# submuestra para training
+trVentas <- window(z_Ventas,start=index(z_Ventas[1]),end=index(z_Ventas[nObs-cOmit]))
+
+# submuestra para testing
+teVentas <- window(z_Ventas,start=index(z_Ventas[nObs-cOmit+1]),end=index(z_Ventas[nObs])
+)
+```
+
+```{r ARIMA model}
+# modelo ARIMA, lambda 0 para que aplique logaritmo
+fit2 <- auto.arima(trVentas,lambda=0) 
+summary(fit2)
+# AIC corregido de -39.3
+# medidas de error dentro de la muestra, MAPE (error relativo) 8.284962  y RMSE 4786.405 (raíz del error cuadrático medio)
+```
+
+### Análisis gráfico de residuos
+
+```{r residual analysis}
+# analizamos si el modelo seleccionado cumple con la condicion de ser ruido blanco
+# que ACF y PACF sean cero para todos los retardos
+ggtsdisplay(fit2$residuals)
+```
+
+### Test Box L-jung
+
+```{r Box L-jung}
+# retardo 4
+Box.test(fit2$residuals,lag=4, fitdf=1, type="Lj") 
+# p value igual a 0.536, mayor de 5%. Se acepta la Ho ausencia de correlacion por tanto ruido blanco
+```
+```{r}
+# retardo 6
+Box.test(fit2$residuals,lag=6, fitdf=1, type="Lj")
+# p value igual a 0.5446, mayor de 5%. Se acepta la Ho ausencia de correlacion por tanto ruido blanco
+```
+
+```{r}
+# retardo 8
+Box.test(fit2$residuals,lag=8, fitdf=1, type="Lj")
+# p value igual a 0.7206, mayor de 5%. Se acepta la Ho ausencia de correlacion por tanto ruido blanco
+```
+En el gráfico anterior puede observarse que los residuos son ruido blanco ya que tanto la autocorrelación simple (ACF) como la autocorrelación parcial (pafc) son cero para todo los retardos (las lineas estan dentro de las baldas, por tanto, es estadisticamente igual a 0), excepto el 9 del ACF. 
+
+Además, el test de Box-Ljung confirma esto pues en todos los casos se ha aceptado la hipótesis nula que confirma la ausencia de correlación.
+
+
+### Predicción
+
+```{r}
+# prediccion
+prventas.arima <- forecast(fit2)
+```
+
+```{r, warning=FALSE}
+# grafica 
+# geom_point para los puntos
+# geom_line para las lineas de union 
+# alpha dibuja la transparencia y con forecast la prediccion de ventas
+ggplot(df_apple) + geom_point(aes(x=time,y=value)) + 
+geom_line(aes(x=time,y=value)) + geom_forecast(prventas.arima,alpha=0.4) + ggtitle("ARIMA: Predicción Apple")
+```
+
+En esta gráfica quedan proyectados los valores de la serie para el año 2017 y 2018, se puede apreciar con el sombreado de color azul. Posteriormente podemos conocer las cifras exactas con la siguiente tabla. Si las comparamos con las cifras reales de nuestra base de datos vemos que las predicciones son pesimistas y que Apple finalmente obtuvo mayores ingresos de los previstos durante los 3 primeros trimestres de 2017.
+
+```{r}
+# vemos los datos
+prventas.arima
+```
+
+## Modelo ETS
+
+Ahora vamos a pasar a obtener el mejor modelo de forma automática con ETS.
+
+### Predicción
+
+```{r}
+# modelo ETS 
+etsfit <- ets(trVentas, damped = TRUE)
+
+# prediccion
+prventas.ets <- forecast(etsfit)
+```
+```{r, warning=FALSE}
+# grafica 
+ggplot(df_apple) + geom_point(aes(x=time,y=value)) + 
+geom_line(aes(x=time,y=value)) + geom_forecast(prventas.ets,alpha=0.4) + ggtitle("ETS: Predicción Apple")
+```
+
+```{r}
+# resultados en summary
+summary(prventas.ets)
+# AIC corregido 715.9615
+# MAPE 8.77168
+# RMSE 4012.287
+```
+
+Aquí hemos obtenido la predicción de ventas con el modelo ETS. Puede apreciarse que las predicciones de ingresos son distintas según que modelo, por lo tanto, tenemos que tomar la decisión de con qué modelo nos quedamos. Para ello comparamos los indicadores de ambos modelos. Se observa que EL AIC, AIC corregido y BIC son en todos los casos menores en el modelo ARIMA. Igualmente, el error en términos relativos MAPE es menor en el modelo ARIMA (8.284) que en el ETS (8.771) y también la raíz del error cuadrático medio, ARIMA (4786.405) ETS (4012.287). Por tanto, se entiende que el modelo ARIMA tiene mayor precisión en la predicción, nos quedamos con el modelo ARIMA.
+
+# Conclusiones
+
+Tras predecir las ventas de Apple para los años 2017 y 2018 mediante los modelos ARIMA y ETS hemos decidido seleccionar el primer modelo como el más preciso ya que los errores en la muestra empleada con menores. Con este modelo hemos podido predecir que se estima que los ingresos de Apple tengan un pico de crecimiento tanto en el primer cuatrimestre de 2017 como 2018 seguido en ambos casos de caídas en las ventas en los siguientes trimestres.
+
+
+
