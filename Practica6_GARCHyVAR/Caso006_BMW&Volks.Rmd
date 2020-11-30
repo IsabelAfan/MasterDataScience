@@ -1,0 +1,326 @@
+---
+title: "BMW vs Volkswagen"
+author: "Isabel Afán de Ribera"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+      toc: yes
+      toc_depth: 2
+      theme: sandstone
+---
+
+## Objetivo
+
+El objetivo de este análisis sobre series temporales es obtener el modelo Garch más adecuado para los activos de BMW y posteriormente plantear un modelo VAR mensual entre los activos de BMW y Volkswagen. 
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=TRUE, warning=FALSE, include=FALSE}
+library(quantmod) # to download financials historical data
+library(forecast) # prediction
+library(fGarch) # Garch model
+library(vars) # VAR model
+```
+
+```{r include=FALSE}
+# funciones
+archTest <- function(rtn,m=10){
+  # Perform Lagrange Multiplier Test for ARCH effect of a time series
+  # rtn: time series
+  # m: selected AR order
+  # TSAY(2013)
+  y=(rtn-mean(rtn))^2
+  T=length(rtn)
+  atsq=y[(m+1):T]
+  x=matrix(0,(T-m),m)
+  for (i in 1:m){
+    x[,i]=y[(m+1-i):(T-i)]
+  }
+  md=lm(atsq~x)
+  summary(md)
+}
+```
+
+## Modelo Garch BMW
+
+### Fluctuación en los precios, rentabilidad y volatilidad de BMW
+
+Se ha extraído de Yahoo Finance los datos sobre las acciones de la compañía automovilística alemana BMW desde enero de 2014 hasta la fecha actual con el fin de analizar la evolución de su precio, rendimiento y volatilidad.
+
+```{r include=FALSE}
+#Yahoo ticker (stock or index)
+sSymbol <- "BMW.DE"
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# get data from yahoo
+# intraday data from 2014 to 2020
+mData <- getSymbols(sSymbol,from="2014-01-01",to="2020-11-25",auto.assign=FALSE)
+#Define workdata
+xData <- Ad(mData)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+#Calculate Daily Arithmetic Return
+dRentCont <- dailyReturn(xData,type='log',leading=FALSE)
+
+#Exclude NA (First data)
+dRentCont <- na.exclude(dRentCont)
+```
+
+```{r include=FALSE}
+plot.zoo(cbind(xData,dRentCont),main=paste(sSymbol," y  Rentabilidad"),xlab="años",ylab=c("Precio","Rentabilidad"))
+grid(lwd=2)
+```
+
+```{r echo=FALSE}
+#Volatilidad GARCH
+#Plot return squared
+plot.zoo(cbind(Ad(mData),dRentCont,dRentCont^2),main=paste(sSymbol," y  Rentabilidad"),xlab="años",ylab=c("Precio","Rentabilidad","Volatilidad"))
+```
+
+
+En estos gráficos puede visualizarse la variabilidad que se produce a lo largo del tiempo en el precio, rendimiento y volatilidad de los activos de BMW. Como en cualquier otro activo la varianza y la desviación tipica fluctuan. Además, es destacable en el año 2020 el pico de caída en el precio que se ve reflejado en un pico de subida en la volatilidad. 
+
+### Análisis de residuos
+
+T-test
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+#testing mean
+t.test(dRentCont)
+# p-value 0.7819
+```
+
+
+A través del t-test se comprueba si los valores tienen residuos con media 0. Se ha obtenido un p-value de 0.7819 y por tanto puede decirse con un 95% de confianza que los residuos poseen una media estadisticamente igual a 0 con un intervalo de confianza de (-0.0007138974, 0.0009486177).
+
+```{r include=FALSE}
+#ACF & PACF 
+# VolProxy=abs(dRentCont) # absolute value
+VolProxy <- dRentCont^2 #squared
+```
+
+Representación gráfica de residuos
+
+```{r echo=FALSE}
+#ACF y PACF
+tsdisplay(VolProxy) 
+```
+
+
+Estas gráficas reflejan una serie temporal no estacionaria, es decir, con media y varianza cambiante. Si nos fijamos en la autocorrelación simple (acf) y la autocorrelación parcial (pacf) vemos que los retardos se salen de las bandas discontinuas azules, lo cual nos indica que el coeficiente de autocorrelación no es cero y, por tanto, los errores de los residuos no son ruido blanco. 
+
+Ljung-Box Test
+
+```{r echo=FALSE}
+#Ljung-Box Test 
+Box.test(VolProxy,lag=10,  type="Lj")
+Box.test(VolProxy,lag=20,  type="Lj")
+Box.test(VolProxy,lag=40,  type="Lj")
+```
+
+Para confirmar realizamos el test Box-Ljung y obtenemos para todos los retardos un p-value inferior a 0.05 con lo cual rechazamos la Ho, existe autocorrelación y no hay ruido blanco.
+
+LM test
+
+```{r echo=FALSE}
+#LM test
+archTest(dRentCont,20)
+```
+Por último, con el Lagrange Multiplier Test (LM) se ha comprobado que el modelo tiene Garch, p-value < 2.2e-16.
+
+###  Modelo Garch
+
+Modelo autorregresivo de heterocedasticidad condicional que busca la modelización de la volatilidad (desviación típica) en la cual esta dependerá de observaciones pasadas. En series financieras la variabilidad no es fija sino todo lo contrario, es muy cambiante.
+
+Modelo ARCH
+
+```{r include=FALSE}
+#ARCH(1)
+m1<-garchFit(~1+garch(1,0),data=dRentCont,trace=F) # Fit an ARCH(1) model
+summary(m1)
+resi<-residuals(m1,standardize=T) #residuals
+resi<-xts(resi,order.by=index(dRentCont)) #residuals as xts
+```
+
+```{r echo=FALSE}
+tsdisplay(resi^2) #acf pacf residuals
+```
+
+En los resultados obtenidos con un modelo ARCH con varianza igual a 1 (q=1), es decir, con heterocedasticidad condicional autorregresiva de orden 1. Volvemos a ver que los residuos (esta vez al cuadrado) no son ruido blanco y existe autocorrelación.
+
+Modelo GARCH 
+
+```{r echo=FALSE, warning=FALSE}
+#GARCH(1,1) p=número de variaciones de retardo q=número de errores residuales de retardo
+m2=garchFit(~1+garch(1,1),data=dRentCont, trace = F) # Fit an GARCH(1,1) model
+summary(m2)
+resi=residuals(m2, standardize = T) #residuals
+resi=xts(resi,order.by=index(dRentCont)) #residuals as xts
+tsdisplay(resi^2) #acf pacf residuals
+# Error Analysis, los alpha, beta y omega son significativos
+# Test estadisticos de autocorrelacion
+# Criterios estadisticos para seleccionar el mejor modelo 
+```
+
+Aplicando un modelo Garch (1,1) y analizando los resultados puede verse que los p-value de los residuos y residuos al cuadrado siguen siendo muy bajos. Sin embargo, gráficamente parece que los residuos son ruido blanco, es decir, que ya no tienen correlación.
+
+```{r include=FALSE}
+#plot(m2)
+#En gráfico puede observarse la districución de los datos mediante QQ Plot de la #que se concluye que los datos no siguen una distribución normal pues algunos #datos se desvian de la linea recta. Por tanto, se realiza un modelo con #t-student.
+```
+
+
+
+```{r include=FALSE}
+#t-student
+m3 <- garchFit(~1+garch(1,1),data=dRentCont,trace=F,cond.dist="std")
+summary(m3)
+```
+```{r include=FALSE}
+#plot(m3)
+#Los retardos parecen estadisticamente iguales a cero. 
+```
+
+
+```{r include=FALSE}
+#plot(m3)
+#Se obtiene una distribución de los datos más cercana a la normal.
+```
+
+
+Representación gráfica de la volatilidad
+
+En el siguiente grafico se puede observar los cambios en la volatilidad de las acciones de BMW desde 2014 hasta 2020, donde resulta destacable el pico de incremento de la volatilidad en marzo de 2020 debido al COVID-19 que generó mucha inestabilidad en los mercados financieros siendo uno de los sectores más afectados en de la industria del automóvil.
+
+```{r echo=FALSE}
+v1<-volatility(m3)  # Obtain volatility
+v1<-xts(v1,order.by=index(dRentCont)) #  volatility as XTS
+plot(sqrt(252)*v1) # 252 días del año bursátil
+```
+
+Análisis de residuos
+
+```{r echo=FALSE}
+resi<-residuals(m3,standardize=T) # Standardized residuals
+resi<-xts(resi,order.by=index(dRentCont)) # Standardized residuals as XTS
+tsdisplay(resi^2) #acf pacf residuals
+plot(resi)
+```
+
+Todos los residuos son ruido blanco, ausencia de correlación.
+
+```{r include=FALSE}
+# Prediccion con Garch
+# PREDICE LA MEDIA DEL RENDIMIENTO DEL ACTIVO Y LA VOLATILIDAD
+# VIENDO EL GRAFICO COMPRARIAMOS EN EL MINIMO Y VENDERIAMOS EN EL MAXIMO
+predict(m3) #forecast volatility
+```
+
+```{r echo=FALSE}
+predict(m3, n.ahead = 10, plot=TRUE, crit_val=2) #plot with 2*standard error
+predict(m3,n.ahead=20,plot=TRUE,conf=.9,nx=100) # plot 100 data with 90% confidence
+```
+Se realiza la predicción de volatilidad con el modelo con residuos distribuidos normalmente y se grafican las proyecciones con volatilidad de entre -0.02 y 0.02 con un nivel de confianza del 90%.
+
+
+## Modelo VAR mensual entre los activos de BMW y Volkswagen
+
+Nuestro objetivo aquí es saber si cambios en una de las variables afectan a la otra. Para conocer si existe relación bidireccional se emplean los vectores autorregresivos VAR.
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+## Leer datos
+bmw <- getSymbols('BMW.DE', from='2014-01-01', to='2020-11-25', env=NULL)
+vols <- getSymbols('VOW3.DE', from='2014-01-01', to='2020-11-25', env=NULL)
+```
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# Generar rentabilidad mensual
+r_bmw <- monthlyReturn(bmw[,6])
+r_vols <- monthlyReturn(vols[,6])
+```
+
+```{r include=FALSE}
+#generar vector
+vY <- cbind(r_bmw,r_vols)
+colnames(vY) <- c('BMW','VOW')
+vY <- na.omit(vY)
+```
+
+### Identificacion del número de retardos a incluir en el VAR
+
+```{r echo=FALSE}
+#Seleccionar modelo
+VARselect(vY)
+```
+Para cada longitud de rezago, la tabla reporta (de arriba hacia abajo), el Criterio de información de Akaike (AIC), Criterio de informacion de Hannan y Quinn (HQ), el criterio información bayesiana de Schwarz (SC) y el error de predicción final de Akaike (FPE). Los cuatro criterios de información han elegido en este caso 1 rezago.
+
+### Estimación del Modelo VAR
+
+```{r include=FALSE}
+# estimar
+model.var <- VAR(vY)
+# summary
+summary(model.var)
+# incluye:
+# log-likelihood se utiliza para construir la prueba de razon de verosimilitud de las restricciones posibles
+# roots indican estabilidad en el modelo dado que son menores a uno
+# error cuadrático medio o error estándar de los residuales
+# prueba F para los coeficientes de regresión y p value
+# matrices de covarianza y correlación de los residuales.
+```
+
+```{r include=FALSE}
+model.var1 <- VAR(vY,type="none") # se vuelve a estimar quitando la constante
+summary(model.var1) 
+```
+
+### Relaciones temporales: Prueba de Causalidad Granger
+
+```{r message=FALSE, warning=FALSE}
+#causalidad de granger, queremos saber si hay efecto bidideccional
+causality(model.var1)
+# p value 0.0152 rechazamos la Ho 
+# p value 7.852e-08 rechazamos la Ho
+```
+Los p-value obtenidos son menores del 5%, por lo tanto, en ambos casos se rechaza la Ho. Por un lado, si hay causalidad de Granger, es decir, un shock en BMW causa Granger un shock en Volkswagen, al menos en nuestro periodo de estimación. Y, por otro, si hay relación instantánea entre BMW y Volkswagen
+
+### Función de Impulso - Respuesta
+
+Las funciones de impulso respuesta muestran los efectos de los shock en la trayectoria de ajuste de las variables.
+
+```{r echo=FALSE}
+# respuesta al impulso
+model.ri <- irf(model.var1)
+model.ri
+# CI 0.95
+```
+
+Visualización del impulso-respuesta:
+
+```{r echo=FALSE}
+plot(model.ri)
+```
+
+En estos gráficos puede verse el efecto que produce un shock en la serie temporal de BMW en la de Volkswagen y vicerversa. Por ejemplo, un shock en BMW supone una fuerte caída en Volkswagen que luego se estabilizaría, como puede observarse en la primera gráfica. En el caso contario, es decir, en el caso de que se produzca un shock en Volkswagen el impulso respuesta en BMW sería también una caída aunque no tan pronunciada, que luego se recuperaría hasta estabilizarse.
+
+Predicciones sobre rendimientos esperados:
+
+```{r echo=FALSE}
+##prediccion
+predict(model.var1, n.ahead = 8, ci = 0.95)
+```
+
+## Referencias
+
+* An Introduction to Impulse Response Analysis of VAR Models. Disponible en: https://www.r-econometrics.com/timeseries/irf/
+
+* Modelos VAR. Disponible en: https://rpubs.com/vchung/var_ejemplo
+
+* Queralt, R.(2020). Series Temporales - Modelos GARCH y Modelos VAR. Colegio Universitario de Estudios Financieros
+
+
+
