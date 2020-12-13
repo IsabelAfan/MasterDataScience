@@ -1,0 +1,119 @@
+---
+title: "CP007 BMW vs Volkswagen II"
+author: "Isabel Afán de Ribera"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output: 
+  html_document:
+      toc: yes
+      toc_depth: 2
+      theme: sandstone
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## 1. Objetivo
+
+Analizar la relación entre BMW y Volkswagen utilizando el modelo de Causal Impact, para estimar el efecto del diesel gate.
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+# load required packages
+library(tseries)
+library(readr)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(xts)
+library(CausalImpact)
+library(quantmod) # to download financials historical data
+```
+
+```{r include=FALSE}
+#Yahoo ticker (stock or index)
+sSymbol1 <- "BMW.DE"
+sSymbol2 <- "VOW3.DE"
+```
+
+```{r message=FALSE, include=FALSE}
+# get data from yahoo
+# intraday data from 2014 to 2020
+bmw <- getSymbols(sSymbol1,from="2014-01-01",to="2020-11-25",auto.assign=FALSE)
+#Define workdata
+xData1 <- Ad(bmw)
+
+vow <- getSymbols(sSymbol2,from="2014-01-01",to="2020-11-25",auto.assign=FALSE)
+#Define workdata
+xData2 <- Ad(vow)
+```
+
+```{r include=FALSE}
+series <- cbind(bmw,vow)
+```
+
+
+```{r include=FALSE}
+start = "2014-01-01"
+  end = "2020-12-10"
+quote = "AdjClose"
+vol <- get.hist.quote(instrument = "VOW.DE", start, end, quote, compression = "w")
+bmw <- get.hist.quote(instrument = "BMW.DE", start, end, quote, compression = "w")
+series <- cbind(vol,bmw)
+```
+
+## 2. Representación gráfica de las series
+
+```{r echo=FALSE}
+colnames(series) <- c("vol", "bmw")
+autoplot(series, facet = NULL) + xlab("") + ylab("Adjusted Close Price")
+```
+
+Como puede observarse en el gráfico se produce una gran caída en la serie de la compañía Volkswagen en septiembre de 2015 cuando se produjo el escándalo de emisiones contaminantes de sus vehículos que supuso una gran bajada en el precio de sus acciones. Algo que afecto también a empresas de la competencia como BMW pero no en tan gran medida.
+
+
+```{r include=FALSE}
+#  define the pre- and post-intervention periods, Emissions Scandal broke on Friday the 18th of September 2015
+pre.period <- as.Date(c(start, "2015-09-14"))
+post.period <- as.Date(c("2015-09-21", end))
+```
+
+## 3. Impacto del diesel gate
+
+```{r echo=FALSE, warning=FALSE}
+impact_vw <- CausalImpact(series[, 1], pre.period, post.period, model.args = list(niter = 1000, nseasons = 52))
+plot(impact_vw)
+```
+
+```{r include=FALSE}
+summary(impact_vw)
+```
+
+### Report
+
+```{r echo=FALSE}
+summary(impact_vw, "report")
+```
+## 4. Impacto incluyendo BMW como regresor de la serie de Volkswagen
+
+```{r echo=FALSE, warning=FALSE}
+impact_vw_reg <- CausalImpact(series, pre.period, post.period, model.args = list(niter = 1000, nseasons = 52))
+plot(impact_vw_reg)
+```
+
+```{r include=FALSE}
+summary(impact_vw_reg)
+```
+
+### Report
+
+```{r echo=FALSE}
+summary(impact_vw_reg, "report")
+```
+
+## References
+
+* RPubs (2017) Causal Impact Analysis on VolksWagen Emissions Scandal disponible en: https://rpubs.com/rinaldif/volkswagen-causal-impact
+
+
+
+
